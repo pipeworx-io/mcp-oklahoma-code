@@ -1,0 +1,32 @@
+{
+  "name": "@pipeworx/mcp-oklahoma-code",
+  "version": "0.1.0",
+  "description": "Oklahoma Statutes — state statutes by citation, full-text topic search,",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "bin": {
+    "mcp-oklahoma-code": "bin/cli.js"
+  },
+  "keywords": ["mcp", "mcp-server", "model-context-protocol", "pipeworx", "oklahoma-code"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pipeworx-io/mcp-oklahoma-code.git"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@cloudflare/workers-types": "^4.20260405.1"
+  },
+  "pipeworx": {
+    "sourceHash": "v1-211d8107abb518846b00e59c4f54713439a323b0ec4629c1ab828c9468d80102",
+    "sourceCommit": "eb436cf60f06c9b79701a15cd1670609580544a5"
+  }
+}
