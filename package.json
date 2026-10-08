@@ -1,6 +1,6 @@
 {
   "name": "@pipeworx/mcp-oklahoma-code",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Oklahoma Statutes — state statutes by citation, full-text topic search,",
   "type": "module",
   "main": "src/index.ts",
@@ -26,7 +26,7 @@
     "@cloudflare/workers-types": "^4.20260405.1"
   },
   "pipeworx": {
-    "sourceHash": "v1-211d8107abb518846b00e59c4f54713439a323b0ec4629c1ab828c9468d80102",
-    "sourceCommit": "eb436cf60f06c9b79701a15cd1670609580544a5"
+    "sourceHash": "v1-c33d84ad56cee7780490c455e5054f6754ffef44660665e40216ad48356f5604",
+    "sourceCommit": "29efecb1e77577b1ce49e14f4fd7bbaee3e63885"
   }
 }

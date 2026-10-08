@@ -740,15 +740,140 @@ function collapse(s: string): string {
  * a CiteID.
  *
  * Keyless, no signup, no session/cookie state across the two hops.
+ *
+ * REACHED THROUGH THE EGRESS RELAY, NOT DIRECTLY (fleet #2742, 2026-10-07
+ * post-deploy correction). www.oscn.net fronts itself with Cloudflare and
+ * presents a CLOUDFLARE TURNSTILE challenge page to a live Worker's egress
+ * specifically — verified with a throwaway deployed CF Worker on the prod
+ * account against all three of this pack's own URLs (DeliverDocument.asp,
+ * Search.asp, Index.asp): all three got the identical 2.3-2.5 KB challenge
+ * page (`<title>OSCN Turnstile</title>`, `Server: cloudflare`, HTTP 201,
+ * cf-ray present), 3/3. A non-CF vantage — both a direct curl and a
+ * throwaway Supabase Edge Function deployed on THIS relay's own runtime —
+ * got the real statute HTML back, byte-identical to the laptop smoke test
+ * (13,798 bytes for the DeliverDocument probe, 27,256 for the Search
+ * probe). The origin itself is plain Microsoft-IIS/10.0 ASP; it is
+ * Cloudflare's own edge that blocks a Cloudflare Worker here, which is why
+ * the laptop smoke test in this pack's first build passed while the live
+ * gateway returned a clean `found:false` for every call — the Worker
+ * fetched a real HTTP success (the challenge page is a 2xx) with no
+ * statute body in it, and the parser read that as "not found" rather than
+ * as a transport failure. See `assertNotChallenged` below for the fix: this
+ * is a pure IP-reputation hop like kalshi/loc.gov in
+ * `supabase/functions/egress-proxy`, NOT a TLS-chain issue like Utah's
+ * 526 (`mcps/utah-code`) — no PINNED_CA entry needed, `ALLOWED_HOSTS` is
+ * enough.
  */
 
 const UA = 'pipeworx-mcp-oklahoma-code/1.0 (+https://pipeworx.io)';
 const UPSTREAM = 'Oklahoma State Courts Network (oscn.net)';
 const BASE = 'https://www.oscn.net/applications/oscn';
 
-async function pwFetch(url: string | URL, init?: RequestInit): Promise<Response> {
+/** `_proxyUrl`/`_proxyToken`, injected by the gateway for this slug exactly
+ *  as it is for utah-code — see workers/gateway/src/index.ts. Absent (local
+ *  dev, or a run against a gateway build that predates this fix) we fall
+ *  back to a direct fetch, which still works for an egress whose Cloudflare
+ *  reputation OSCN has not flagged (a laptop, this pack's own smoke test). */
+type Relay = { url: string; token: string } | null;
+
+function relayFrom(args: Record<string, unknown>): Relay {
+  const url = (args._proxyUrl as string | undefined)?.trim();
+  const token = (args._proxyToken as string | undefined)?.trim();
+  return url && token ? { url, token } : null;
+}
+
+async function pwFetch(url: string | URL, relay: Relay, init?: RequestInit): Promise<Response> {
+  if (relay) {
+    // The relay forwards the target verbatim and returns the upstream
+    // response status/body unchanged. userAgent must be passed explicitly —
+    // the relay strips caller headers by design. Its own Accept is
+    // application/json; OSCN serves its real HTML regardless (verified).
+    return fetchWithTimeout(
+      relay.url,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${relay.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: String(url), userAgent: UA }),
+      },
+      `${UPSTREAM} via the Pipeworx egress relay`,
+    );
+  }
   const headers = { 'User-Agent': UA, ...(init?.headers ?? {}) };
   return fetchWithTimeout(url, { ...init, headers }, UPSTREAM);
+}
+
+/** The relay synthesizes exactly these `{error}` bodies for a request that
+ *  never reached oscn.net at all — a dead bearer token, the host dropped
+ *  from its allow-list. Every one of those is OUR configuration and must
+ *  book as our own outage, never as "the Oklahoma courts site is down"
+ *  (same reasoning as mcps/utah-code's RELAY_SELF_ERRORS). */
+const RELAY_SELF_ERRORS = new Set(['unauthorized', 'bad_request', 'bad_url', 'host_not_allowed', 'method_not_allowed']);
+
+async function relaySelfError(res: Response, relay: Relay): Promise<string | null> {
+  if (!relay || res.ok) return null;
+  let body: unknown;
+  try {
+    body = await res.clone().json();
+  } catch {
+    return null;
+  }
+  const code = (body as { error?: unknown } | null)?.error;
+  if (typeof code !== 'string' || !RELAY_SELF_ERRORS.has(code)) return null;
+  return markInternalOrigin(
+    `Pipeworx egress relay refused the request (${code}) — this is our own relay configuration, not oscn.net. See supabase/functions/egress-proxy.`,
+    relay.url,
+    500,
+  );
+}
+
+/**
+ * THE LOUD-FAILURE FIX (fleet #2742 post-deploy correction). OSCN's
+ * Cloudflare Turnstile challenge page answers HTTP 2xx (201, confirmed
+ * live) with no statute body — a transport failure wearing a success
+ * status code. Call this on every fetched HTML body, before any other
+ * parsing, so a challenge page throws a named, loud error instead of
+ * silently falling through to "0 anchors found" / "no BEGIN DOCUMENT
+ * marker" and answering found:false as if OSCN had genuinely said no.
+ */
+function assertNotChallenged(html: string, status: number, context: string): void {
+  if (/<title>\s*OSCN Turnstile\s*<\/title>/i.test(html) || /challenges\.cloudflare\.com\/turnstile/i.test(html)) {
+    throw new Error(
+      `upstream_blocked: oscn.net answered ${context} with a Cloudflare Turnstile challenge page (HTTP ${status}) instead of the real content. This is a transport failure, not "not found" — see this pack's file header and supabase/functions/egress-proxy's www.oscn.net entry.`,
+    );
+  }
+}
+
+/**
+ * THE SILENT-ZERO FIX (fleet #2742, second post-deploy correction). A real
+ * title index page lists at least one section — there is no title with
+ * zero statutes. ZERO `DeliverDocument.asp?CiteID=` anchors found therefore
+ * means the body is not a real index page at all (a different variant,
+ * a frameset/landing shell, or — the actual root cause this time — the
+ * egress relay's old `.text()` round-trip decoding the ISO-8859-1 body as
+ * UTF-8 and corrupting every `\xa7` the anchor regex depends on, 271,517
+ * bytes becoming 274,853 with every section sign turned into a 3-byte
+ * replacement-character sequence, confirmed with a throwaway Supabase
+ * function reproducing the relay's exact code path). That is a PARSE
+ * failure, never a legitimate "this one section doesn't exist" — call this
+ * BEFORE attempting to match any specific section, so it fires on every
+ * citation in the title, not just the first one somebody happens to probe.
+ *
+ * Deliberately counts `\xa7<digit>` (the exact byte pattern resolveCiteId's
+ * own regexes depend on) rather than `href="DeliverDocument.asp?CiteID="`
+ * anchors — the href text is pure ASCII and SURVIVED the relay's UTF-8
+ * corruption untouched (1,665 of them, confirmed live), which is exactly why
+ * that corruption read as a clean parse with "no match for THIS section"
+ * instead of as a parse failure. Counting the byte that actually gets
+ * corrupted is what makes this check mean something for the bug that
+ * motivated it, not just for a hypothetical future one.
+ */
+function assertHasSections(html: string, url: string): void {
+  const sectionSignCount = (html.match(/\xa7\s*[0-9]/g) || []).length;
+  if (sectionSignCount === 0) {
+    throw new Error(
+      `upstream_parse: oscn.net's title index at ${url} (body ${html.length} chars) has ZERO "\xa7<number>" section headings. Every real Oklahoma Statutes title has at least one section — this is a parse failure, not "section not found". Likely causes: a non-index page shape, or the section-sign byte corrupted in transit (see supabase/functions/egress-proxy's byte-passthrough fix).`,
+    );
+  }
 }
 
 /** Title number (as it appears in a citation, e.g. "21", "10A", "85A") ->
@@ -946,27 +1071,34 @@ function parsePrintOnly(html: string): PrintOnlyDoc {
   return { heading, chapterPath, citeAs, text, history, historicalVersions, supersededOn };
 }
 
-async function fetchPrintOnly(citeid: number): Promise<PrintOnlyDoc> {
+async function fetchPrintOnly(citeid: number, relay: Relay): Promise<PrintOnlyDoc> {
   const url = `${BASE}/deliverdocument.asp?citeid=${citeid}&PrintOnly=true`;
-  const res = await pwFetch(url);
+  const res = await pwFetch(url, relay);
+  const selfError = await relaySelfError(res, relay);
+  if (selfError) throw new Error(selfError);
   if (!res.ok) throw await httpError(res, UPSTREAM);
   const buf = await res.arrayBuffer();
   const html = new TextDecoder('iso-8859-1').decode(buf);
+  assertNotChallenged(html, res.status, `deliverdocument.asp?citeid=${citeid}`);
   return parsePrintOnly(html);
 }
 
 /** Resolve a title+section citation to its OSCN CiteID by scanning that
  *  title's flattened index page. One fetch — see the file header for why
  *  there is no smaller unit to fetch instead. */
-async function resolveCiteId(title: string, section: string): Promise<{ citeid: number; titleName: string } | { error: 'unknown_title' } | { error: 'section_not_found'; titleName: string; near: string[] }> {
+async function resolveCiteId(title: string, section: string, relay: Relay): Promise<{ citeid: number; titleName: string } | { error: 'unknown_title' } | { error: 'section_not_found'; titleName: string; near: string[] }> {
   const titleInfo = TITLES[title];
   if (!titleInfo) return { error: 'unknown_title' };
 
   const url = `${BASE}/Index.asp?ftdb=${titleInfo.dbcode}&level=1`;
-  const res = await pwFetch(url);
+  const res = await pwFetch(url, relay);
+  const selfError = await relaySelfError(res, relay);
+  if (selfError) throw new Error(selfError);
   if (!res.ok) throw await httpError(res, UPSTREAM);
   const buf = await res.arrayBuffer();
   const html = new TextDecoder('iso-8859-1').decode(buf);
+  assertNotChallenged(html, res.status, `Index.asp?ftdb=${titleInfo.dbcode}`);
+  assertHasSections(html, url);
 
   const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // "\xa7" is the section-sign byte OSCN uses as a literal prefix in its own
@@ -986,6 +1118,7 @@ async function resolveCiteId(title: string, section: string): Promise<{ citeid: 
 }
 
 async function okStatute(args: Record<string, unknown>) {
+  const relay = relayFrom(args);
   const versionCiteId = args.version_citeid !== undefined && args.version_citeid !== null && args.version_citeid !== ''
     ? Number(args.version_citeid)
     : null;
@@ -999,7 +1132,7 @@ async function okStatute(args: Record<string, unknown>) {
         message: `"${args.version_citeid}" is not a valid version_citeid — pass the integer "citeid" field from a previous result's historical_versions array.`,
       };
     }
-    const doc = await fetchPrintOnly(versionCiteId);
+    const doc = await fetchPrintOnly(versionCiteId, relay);
     if (!doc.text) {
       return {
         found: false, reason: 'version_not_found', version_citeid: versionCiteId,
@@ -1041,7 +1174,7 @@ async function okStatute(args: Record<string, unknown>) {
     };
   }
 
-  const resolved = await resolveCiteId(parsed.title, parsed.section);
+  const resolved = await resolveCiteId(parsed.title, parsed.section, relay);
   if ('error' in resolved && resolved.error === 'unknown_title') {
     return {
       found: false, reason: 'unknown_title', title: parsed.title,
@@ -1063,7 +1196,7 @@ async function okStatute(args: Record<string, unknown>) {
   }
   const { citeid, titleName } = resolved as { citeid: number; titleName: string };
 
-  const doc = await fetchPrintOnly(citeid);
+  const doc = await fetchPrintOnly(citeid, relay);
   if (!doc.text) {
     return {
       found: true,
@@ -1151,6 +1284,7 @@ function parseSearchResults(html: string): { total: number; hits: SearchHit[] } 
 }
 
 async function okSearch(args: Record<string, unknown>) {
+  const relay = relayFrom(args);
   const query = String(args.query ?? '').trim();
   if (!query) {
     return {
@@ -1169,10 +1303,13 @@ async function okSearch(args: Record<string, unknown>) {
   url.searchParams.set('dbCodeText', 'STOKST');
   url.searchParams.set('SUBMITTED', 'true');
 
-  const res = await pwFetch(url);
+  const res = await pwFetch(url, relay);
+  const selfError = await relaySelfError(res, relay);
+  if (selfError) throw new Error(selfError);
   if (!res.ok) throw await httpError(res, UPSTREAM);
   const buf = await res.arrayBuffer();
   const html = new TextDecoder('iso-8859-1').decode(buf);
+  assertNotChallenged(html, res.status, 'Search.asp');
   const { total, hits } = parseSearchResults(html);
 
   if (!hits.length) {
