@@ -1,12 +1,20 @@
 {
   "name": "@pipeworx/mcp-oklahoma-code",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Oklahoma Statutes — state statutes by citation, full-text topic search, amendment history, and historical (superseded) versions.",
   "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./tools.json": "./tools.json",
+    "./package.json": "./package.json"
+  },
   "bin": {
     "mcp-oklahoma-code": "bin/cli.js"
+  },
+  "files": ["bin/", "lib/", "tools.json", "server.json"],
+  "engines": {
+    "node": ">=18"
   },
   "keywords": ["mcp", "mcp-server", "model-context-protocol", "pipeworx", "oklahoma-code"],
   "license": "MIT",
@@ -14,19 +22,12 @@
     "type": "git",
     "url": "git+https://github.com/pipeworx-io/mcp-oklahoma-code.git"
   },
-  "scripts": {
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "tsx": "^4.19.0"
-  },
-  "devDependencies": {
-    "typescript": "^5.9.3",
-    "@cloudflare/workers-types": "^4.20260405.1"
-  },
+  "mcpName": "io.github.pipeworx-io/oklahoma-code",
   "pipeworx": {
-    "sourceHash": "v1-ae32576b762f5c2eac31aa4ecdd7ac728ab8d01af4cdb68cb90a50b70a6deccd",
-    "sourceCommit": "f54ad77e789f27fe393978f9c080b5b18c87bb4f"
+    "mode": "gateway",
+    "slug": "oklahoma-code",
+    "gatewaySlug": "oklahoma-code",
+    "sourceHash": "v1-4a9764c749a80f6be14b0431b63c7d7d2504d6dc563cf8ff117260cc9daf8a82",
+    "sourceCommit": "b2c4383545bb35171d0ada2beb1c9c7168ea175e"
   }
 }
