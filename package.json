@@ -1,6 +1,6 @@
 {
   "name": "@pipeworx/mcp-oklahoma-code",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Oklahoma Statutes — state statutes by citation, full-text topic search, amendment history, and historical (superseded) versions.",
   "type": "module",
   "main": "lib/index.js",
@@ -27,7 +27,7 @@
     "mode": "gateway",
     "slug": "oklahoma-code",
     "gatewaySlug": "oklahoma-code",
-    "sourceHash": "v1-4a9764c749a80f6be14b0431b63c7d7d2504d6dc563cf8ff117260cc9daf8a82",
-    "sourceCommit": "b2c4383545bb35171d0ada2beb1c9c7168ea175e"
+    "sourceHash": "v1-3e515da34c17ea363c7c1fc7fb2d12a03602725ce5b960ce3de5b846406af5e1",
+    "sourceCommit": "bed7faa04e7276899b5e3870ef11c98625371f2b"
   }
 }
